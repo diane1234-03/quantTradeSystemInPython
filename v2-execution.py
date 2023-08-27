@@ -1,3 +1,4 @@
+from __future__ import annotations  
 # -*- coding: utf-8 -*-
 """
 Created on Sun Aug 27 10:57:31 2023
@@ -11,8 +12,10 @@ Spyder Editor
  
 This is a temporary script file.
 """
+
+
 # 事件驱动的量化框架
-from __future__ import annotations  # the FUTURE of annotation...hah 
+# the FUTURE of annotation...hah 
 from collections import defaultdict
 from typing import Any, Dict, List, Callable
 from abc import ABC, abstractmethod
@@ -42,6 +45,15 @@ class EventType(Enum):
     #执行订单后的返回事件。
     TRADE = "TRADE"
 
+class AssetType(Enum):
+    CASH = "cash"
+
+# 继承enum类
+class OrderType(Enum):
+    MARKET = "MARKET"
+    LIMIT = "MARKET"
+    STOP = "STOP"
+    
 
 @dataclass(frozen=True)
 class Event:
@@ -60,6 +72,26 @@ class Bar:
     volume: float
     timestamp: datetime
 
+@dataclass
+class Asset:
+    type:AssetType 
+    name:str
+
+@dataclass(frozen = True, slots = True)
+class Order: 
+    asset: Asset 
+    type:OrderType 
+    price:float 
+    amount:float 
+    
+
+# 一个订单可能对应多次交易
+@dataclass(frozen=True, slots= True)
+class Trade:
+    order_id:int 
+    amount:float
+    price:float 
+    
 
 # 1.  I create engine...
 class Engine:
@@ -68,6 +100,12 @@ class Engine:
         self.bus = bus
         self.strategy = strategy
         self.feed = feed
+    
+    def __init__(self, bus: EventBus, strategy: Strategy, feed: DataFeed, execution:Execution):
+        self.bus = bus
+        self.strategy = strategy
+        self.feed = feed
+        self.execution = execution
 
     def run(self):
         # subs
@@ -119,6 +157,7 @@ class EventBus:
         self.thread.join()
 
 
+# abc:定义自己的基类（抽象类接口），可以强制要求子类实现接口。
 class DataFeed(ABC):
 
     # a interface
@@ -162,14 +201,74 @@ class DummyBarFeed(DataFeed):
             LOG.debug(f"DummyBarFeed pushed {event}")
             self.bus.push(event)
 
+class Execution(ABC):
+    @abstractmethod
+    def submit_order(self,order:Order) ->int :
+        ...
+    
+    @abstractmethod
+    def cancle_order(self,order_id:int) :
+        ...
+    
+    @abstractmethod
+    def modify_order(self,order_id:int,order:Order) :
+        ...
+    
+    @abstractmethod
+    def on_order_create(self,order:Order) :
+        ...
+    
+    @abstractmethod
+    def start(self) ->int :
+        ...
+
+class DummyExecution(Execution):
+    def __init__(self,bus:EventBus):
+        self.bus = EventBus 
+        
+    def submit_order(self,order:Order) ->int :
+        return super().submit_order(order)
+    
+    def cancle_order(self,order_id:int) :
+        return super().cancle_order(order_id)
+    
+    
+    def modify_order(self,order_id:int,order:Order) :
+        return super().modify_order(order_id, order)
+    
+    
+    def on_order_create(self,order:Order) :
+        LOG.info(f"Execution received {order = }")
+    
+    
+    def start(self) ->int :
+        super().start()    
+
 
 # 2. I write down strategy class
 class Strategy:
+    def __init__(self,bus:EventBus):
+        self.bus = bus
 
     def on_bar(self, bar: Bar):
         latency = datetime.now() - bar.timestamp
         LOG.info(f"Strategy reveived {bar} with latency {latency.microseconds / 1000} ms")
         LOG.info(f"Computing some fancy signal ...")
+        LOG.info(f"submiting order...")
+        self.submit_order()
+    
+    def submit_order(self):
+        order = Order(
+            asset=Asset(AssetType.CASH,name="Bitcoin"),
+            type=OrderType.MARKET,
+            price=-1, 
+            amount=1.0
+            )
+        event = Event( 
+            EventType.ORDER_CREATE,
+            payload=order
+            )
+        self.bus.push(event)
 
         
 
@@ -177,8 +276,10 @@ if __name__ == "__main__":
     
     LOG.debug("Tesing EventBus")
     bus = EventBus(sample_freq=0.05)
-    strat = Strategy()
+    strat = Strategy(bus)
+    execution = DummyExecution(bus)
     feed = DummyBarFeed(bus)
-    engine = Engine(bus, strategy=strat, feed=feed)
+    engine = Engine(bus, strategy=strat, feed=feed,execution=execution)
+    
 
     engine.run()
